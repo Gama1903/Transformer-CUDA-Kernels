@@ -1,8 +1,7 @@
 #pragma once
 
 #include <cuda_fp16.h>
-#include <kernel_samples/base/error.cuh>
-#include <kernel_samples/base/execution_config.cuh>
+#include <kernel_samples/base/general.cuh>
 
 #define FLOAT4(value) (reinterpret_cast<float4 *>(&(value))[0])
 #define HALF2(value) (reinterpret_cast<half2 *>(&(value))[0])
@@ -13,7 +12,7 @@
 template <int N>
 __global__ void elementwise_add_f32_kernel(float *a, float *b, float *c)
 {
-    int global_idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int const global_idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (global_idx < N)
         c[global_idx] = a[global_idx] + b[global_idx];
 }
@@ -22,8 +21,8 @@ __global__ void elementwise_add_f32_kernel(float *a, float *b, float *c)
 template <int N>
 __global__ void elementwise_add_f32x4_kernel(float *a, float *b, float *c)
 {
-    int global_idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int vec_base_idx = global_idx * 4;
+    int const global_idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int const vec_base_idx = global_idx * 4;
 
     if (vec_base_idx < N)
     {
@@ -60,7 +59,7 @@ void elementwise_add_f32(float *a, float *b, float *c)
 template <int N>
 __global__ void elementwise_add_f16_kernel(half *a, half *b, half *c)
 {
-    int global_idx = threadIdx.x + blockDim.x * blockIdx.x;
+    int const global_idx = threadIdx.x + blockDim.x * blockIdx.x;
     if (global_idx < N)
         c[global_idx] = __hadd(a[global_idx], b[global_idx]);
 }
@@ -69,8 +68,8 @@ __global__ void elementwise_add_f16_kernel(half *a, half *b, half *c)
 template <int N>
 __global__ void elementwise_add_f16x8_kernel(half *a, half *b, half *c)
 {
-    int global_idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int vec_base_idx = global_idx * 8;
+    int const global_idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int const vec_base_idx = global_idx * 8;
     if (vec_base_idx < N)
     {
         half reg_a[8], reg_b[8], reg_c[8];
