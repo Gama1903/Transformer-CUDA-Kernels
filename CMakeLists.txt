@@ -11,12 +11,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # CUDA设置
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES 89)
+set(CMAKE_CUDA_ARCHITECTURES "80" "86")
 set(CMAKE_CUDA_COMPILER "/usr/local/cuda/bin/nvcc")
 
 # 其他设置
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# set(Torch_DIR /usr/local/lib/python3.10/dist-packages/libtorch/share/cmake/Torch)
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 # 项目信息
 project(kernel_samples VERSION 0.1.0 LANGUAGES C CXX CUDA)

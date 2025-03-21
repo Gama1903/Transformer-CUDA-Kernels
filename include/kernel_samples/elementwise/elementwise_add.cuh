@@ -1,7 +1,18 @@
 #pragma once
 
+/**
+ * @file elementwise_add.cuh
+ * @author Gama1903 (gama1903@qq.com)
+ * @brief 亮点：在原文件基础上，使用模板函数，给出了不同数据类型和不同向量化长度核函数的统一接口，并给出了错误处理
+ * @version 0.1
+ * @date 2025-03-21
+ *
+ * @copyright Copyright (c) 2025
+ *
+ */
+
 #include <cuda_fp16.h>
-#include <kernel_samples/base/general.cuh>
+#include <kernel_samples/base/common.cuh>
 
 #define FLOAT4(value) (reinterpret_cast<float4 *>(&(value))[0])
 #define HALF2(value) (reinterpret_cast<half2 *>(&(value))[0])
@@ -9,20 +20,18 @@
 
 // -------------------------------------- FP32 --------------------------------------
 
-template <int N>
-__global__ void elementwise_add_f32_kernel(float *a, float *b, float *c)
+__global__ void elementwise_add_f32_kernel(float *a, float *b, float *c, int const N)
 {
-    int const global_idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (global_idx < N)
-        c[global_idx] = a[global_idx] + b[global_idx];
+    int const global_tid = threadIdx.x + blockIdx.x * blockDim.x;
+    if (global_tid < N)
+        c[global_tid] = a[global_tid] + b[global_tid];
 }
 
-// N / 4 == 1
-template <int N>
-__global__ void elementwise_add_f32x4_kernel(float *a, float *b, float *c)
+// N % 4 == 0
+__global__ void elementwise_add_f32x4_kernel(float *a, float *b, float *c, int const N)
 {
-    int const global_idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int const vec_base_idx = global_idx * 4;
+    int const global_tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int const vec_base_idx = global_tid * 4;
 
     if (vec_base_idx < N)
     {
@@ -43,33 +52,33 @@ __global__ void elementwise_add_f32x4_kernel(float *a, float *b, float *c)
 }
 
 // VEC_LEN = 1, 4
-template <int N, int VEC_LEN>
-void elementwise_add_f32(float *a, float *b, float *c)
+template <int VEC_LEN>
+void elementwise_add_f32(float *a, float *b, float *c, int const N)
 {
     int grid_size;
-    CHECK(get_grid_size(N, &grid_size, BLOCK_SIZE * VEC_LEN));
+    CUDA_CHECK(get_grid_size(N, &grid_size, BLOCK_SIZE * VEC_LEN));
     if constexpr (VEC_LEN == 4)
-        elementwise_add_f32x4_kernel<N><<<grid_size, BLOCK_SIZE>>>(a, b, c);
+        elementwise_add_f32x4_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
     else if constexpr (VEC_LEN == 1)
-        elementwise_add_f32_kernel<N><<<grid_size, BLOCK_SIZE>>>(a, b, c);
+        elementwise_add_f32_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
+    else
+        static_assert(VEC_LEN != VEC_LEN, "Invalid VEC_LEN");
 }
 
 // -------------------------------------- FP16 --------------------------------------
 
-template <int N>
-__global__ void elementwise_add_f16_kernel(half *a, half *b, half *c)
+__global__ void elementwise_add_f16_kernel(half *a, half *b, half *c, int const N)
 {
-    int const global_idx = threadIdx.x + blockDim.x * blockIdx.x;
-    if (global_idx < N)
-        c[global_idx] = __hadd(a[global_idx], b[global_idx]);
+    int const global_tid = threadIdx.x + blockDim.x * blockIdx.x;
+    if (global_tid < N)
+        c[global_tid] = __hadd(a[global_tid], b[global_tid]);
 }
 
-// N / 8 == 1
-template <int N>
-__global__ void elementwise_add_f16x8_kernel(half *a, half *b, half *c)
+// N % 8 == 0
+__global__ void elementwise_add_f16x8_kernel(half *a, half *b, half *c, int const N)
 {
-    int const global_idx = threadIdx.x + blockIdx.x * blockDim.x;
-    int const vec_base_idx = global_idx * 8;
+    int const global_tid = threadIdx.x + blockIdx.x * blockDim.x;
+    int const vec_base_idx = global_tid * 8;
     if (vec_base_idx < N)
     {
         half reg_a[8], reg_b[8], reg_c[8];
@@ -91,13 +100,39 @@ __global__ void elementwise_add_f16x8_kernel(half *a, half *b, half *c)
 }
 
 // VEC_LEN = 1, 8
-template <int N, int VEC_LEN>
-void elementwise_add_f16(half *a, half *b, half *c)
+template <int VEC_LEN>
+void elementwise_add_f16(half *a, half *b, half *c, int const N)
 {
     int grid_size;
-    CHECK(get_grid_size(N, &grid_size, BLOCK_SIZE * VEC_LEN));
+    CUDA_CHECK(get_grid_size(N, &grid_size, BLOCK_SIZE * VEC_LEN));
     if constexpr (VEC_LEN == 8)
-        elementwise_add_f16x8_kernel<N><<<grid_size, BLOCK_SIZE>>>(a, b, c);
+        elementwise_add_f16x8_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
     else if constexpr (VEC_LEN == 1)
-        elementwise_add_f16_kernel<N><<<grid_size, BLOCK_SIZE>>>(a, b, c);
+        elementwise_add_f16_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
+    else
+        static_assert(VEC_LEN != VEC_LEN, "Invalid VEC_LEN");
 }
+
+// -------------------------------------- API --------------------------------------
+
+template <class T, int VEC_LEN>
+void elementwise_add(T *a, T *b, T *c, int const N)
+{
+    if constexpr (std::is_same_v<T, float>)
+        elementwise_add_f32<VEC_LEN>(a, b, c, N);
+    else if constexpr (std::is_same_v<T, half>)
+        elementwise_add_f16<VEC_LEN>(a, b, c, N);
+    else
+        static_assert(!std::is_same_v<T, T>, "Unsupported type");
+}
+
+template <class T>
+void elementwise_add(T *a, T *b, T *c, int const N)
+{
+    for (int i = 0; i < N; i++)
+    {
+        c[i] = a[i] + b[i];
+    }
+}
+
+// -------------------------------------- END --------------------------------------

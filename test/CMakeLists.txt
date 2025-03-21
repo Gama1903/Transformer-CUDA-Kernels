@@ -3,6 +3,8 @@
 # 查找第三方库
 find_package(GTest COMPONENTS gtest CONFIG REQUIRED)
 find_package(glog COMPONENTS glog CONFIG REQUIRED)
+# find_package(Torch REQUIRED)
+# find_package(Python REQUIRED)
 
 # 添加可执行文件
 add_executable(test_kernel_samples)
@@ -13,7 +15,9 @@ target_sources(test_kernel_samples PUBLIC ${TEST_SOURCE})
 target_include_directories(test_kernel_samples PUBLIC ../include)
 
 # 链接库文件
-target_link_libraries(test_kernel_samples PUBLIC GTest::gtest glog::glog)
+target_link_libraries(test_kernel_samples PUBLIC GTest::gtest glog::glog 
+    # ${TORCH_LIBRARIES}
+)
 
 # 测试设置
 enable_testing()

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <random>        // 随机数生成
 #include <cuda_fp16.h>   // half
 #include <iostream>      // cout
 #include <chrono>        // cpu 计时
@@ -10,9 +11,10 @@
 // 执行配置基本设置
 #define BLOCK_SIZE 128
 #define WAVE_NUM 32
+#define WARP_SIZE 32
 
 // 检查CUDA错误
-#define CHECK(call)                                                                  \
+#define CUDA_CHECK(call)                                                             \
     do                                                                               \
     {                                                                                \
         cudaError_t const error_code = call;                                         \
@@ -29,6 +31,8 @@
 // 定义最大元素数量
 constexpr int MAX_ELEMENT_NUM = 1024 * 1024;
 constexpr int N = MAX_ELEMENT_NUM;
+constexpr float MAX_VALUE = 1000.0f;
+constexpr float MIN_VALUE = -1000.0f;
 
 // 计算向上取整的除法
 constexpr int ceil_div(int n, int d)
@@ -90,7 +94,7 @@ struct TypeTraits
 template <>
 struct TypeTraits<float>
 {
-    static constexpr float epsilon = 1e-3f; // 误差范围，用于浮点数比较
+    static constexpr float epsilon = 1e-5f;
     static constexpr auto from_float = [](float x)
     { return x; };
     static constexpr auto to_float = [](float x)
@@ -100,7 +104,7 @@ struct TypeTraits<float>
 template <>
 struct TypeTraits<half>
 {
-    static constexpr float epsilon = 1e-1f; // 半精度浮点放宽误差范围
+    static constexpr float epsilon = 1e-1f;
     static constexpr auto from_float = __float2half;
     static constexpr auto to_float = __half2float;
 };
@@ -141,13 +145,13 @@ struct CudaAllocator
     T *allocate(int size)
     {
         T *ptr = nullptr;
-        CHECK(cudaMallocManaged(&ptr, size * sizeof(T)));
+        CUDA_CHECK(cudaMallocManaged(&ptr, size * sizeof(T)));
         return ptr;
     }
 
     void deallocate(T *ptr, int size = 0)
     {
-        CHECK(cudaFree(ptr));
+        CUDA_CHECK(cudaFree(ptr));
     }
 };
 
@@ -177,11 +181,31 @@ struct CudaVector
             vec.push_back(type_traits::from_float(v));
     }
 
+    explicit CudaVector(int size, float min_val, float max_val, int seed = 42) : vec(size)
+    {
+        std::mt19937 engine(seed);
+        std::uniform_real_distribution<float> dist(min_val, max_val);
+
+        for (auto &elem : vec)
+        {
+            elem = type_traits::from_float(dist(engine));
+        }
+    }
+
+    CudaVector(CudaVector const &other) noexcept : vec(other.vec) {}
+    CudaVector &operator=(CudaVector const &other) noexcept
+    {
+        vec = other.vec;
+        return *this;
+    }
+
     T *data() noexcept { return vec.data(); }
     T const *data() const noexcept { return vec.data(); }
     int size() const noexcept { return vec.size(); }
     T &operator[](int i) noexcept { return vec[i]; }
     T const &operator[](int i) const noexcept { return vec[i]; }
+    T &at(int i) noexcept { return vec.at(i); }
+    T const &at(int i) const noexcept { return vec.at(i); }
     auto begin() noexcept { return vec.begin(); }
     auto end() noexcept { return vec.end(); }
     bool empty() const noexcept { return vec.empty(); }
@@ -204,7 +228,7 @@ struct CudaVector
             {
                 std::cout << "Kernel " << i / 2 + 1 << "\n";
                 std::cout << "Duration: " << type_traits::to_float(vec[i]) << " us, ";
-                std::cout << "speedup: " << type_traits::to_float(vec[i + 1]) << "x\n";
+                std::cout << "speedup: " << type_traits::to_float(vec[i + 1]) << "x\n\n";
             }
         }
         else
@@ -224,6 +248,7 @@ struct CudaVector
         {
             std::cout << type_traits::to_float(vec[i]) << " ";
         }
+        std::cout << "\n";
         for (int i = size - n; i < size; i++)
         {
             std::cout << type_traits::to_float(vec[i]) << " ";
