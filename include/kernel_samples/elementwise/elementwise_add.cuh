@@ -1,5 +1,3 @@
-#pragma once
-
 /**
  * @file elementwise_add.cuh
  * @author Gama1903 (gama1903@qq.com)
@@ -10,6 +8,8 @@
  * @copyright Copyright (c) 2025
  *
  */
+
+#pragma once
 
 #include <cuda_fp16.h>
 #include <kernel_samples/base/common.cuh>
