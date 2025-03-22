@@ -2,28 +2,36 @@
 #include <kernel_samples/base/common.cuh>
 #include <kernel_samples/elementwise/gelu.cuh>
 
-template <class T>
+template <class Tp>
 struct Gelu : public ::testing::Test
 {
 protected:
-    CudaVector<T> x_, y_, ref;
+    CudaVector<Tp> x_, y_;
+    CudaVector<float> ref;
 
     Gelu() : x_(N, MIN_VALUE, MAX_VALUE), y_(N), ref(N) {}
 
     template <class Func>
     void Verify(Func func)
     {
-        CudaVector<T> x(x_), y(y_);
+        CudaVector<Tp> x(x_), y(y_);
         func(x.data(), y.data(), N);
         cudaDeviceSynchronize();
 
-        Verifier<T, N> vrf;
+        Verifier<Tp, N> vrf;
         vrf(ref.data(), y.data());
+
+        std::cout << "Res: " << "\n";
+        y.print(8);
     }
 
     void SetUp() override
     {
-        gelu<T>(x_.data(), ref.data(), N);
+        CudaVector<float> x = x_.to_float();
+        gelu<float, 0>(x.data(), ref.data(), N);
+
+        std::cout << "Ref: " << "\n";
+        ref.print(8);
     }
 };
 

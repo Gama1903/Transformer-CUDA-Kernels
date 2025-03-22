@@ -1,7 +1,7 @@
 /**
- * @file elementwise_add.cuh
+ * @file add.cuh
  * @author Gama1903 (gama1903@qq.com)
- * @brief 亮点：在原文件基础上，使用模板函数，给出了不同数据类型和不同向量化长度核函数的统一接口，并给出了错误处理
+ * @brief 亮点：相比原文件，提供统一的模板接口和错误处理
  * @version 0.1
  * @date 2025-03-21
  *
@@ -18,9 +18,17 @@
 #define HALF2(value) (reinterpret_cast<half2 *>(&(value))[0])
 #define LDST128BITS(value) (reinterpret_cast<float4 *>(&(value))[0])
 
+void add_cpu(float *a, float *b, float *c, int const N)
+{
+    for (int i = 0; i < N; i++)
+    {
+        c[i] = a[i] + b[i];
+    }
+}
+
 // -------------------------------------- FP32 --------------------------------------
 
-__global__ void elementwise_add_f32_kernel(float *a, float *b, float *c, int const N)
+__global__ void add_f32_kernel(float *a, float *b, float *c, int const N)
 {
     int const global_tid = threadIdx.x + blockIdx.x * blockDim.x;
     if (global_tid < N)
@@ -28,7 +36,7 @@ __global__ void elementwise_add_f32_kernel(float *a, float *b, float *c, int con
 }
 
 // N % 4 == 0
-__global__ void elementwise_add_f32x4_kernel(float *a, float *b, float *c, int const N)
+__global__ void add_f32x4_kernel(float *a, float *b, float *c, int const N)
 {
     int const global_tid = threadIdx.x + blockIdx.x * blockDim.x;
     int const vec_base_idx = global_tid * 4;
@@ -53,21 +61,21 @@ __global__ void elementwise_add_f32x4_kernel(float *a, float *b, float *c, int c
 
 // VEC_LEN = 1, 4
 template <int VEC_LEN>
-void elementwise_add_f32(float *a, float *b, float *c, int const N)
+void add_f32(float *a, float *b, float *c, int const N)
 {
     int grid_size;
     CUDA_CHECK(get_grid_size(N, &grid_size, BLOCK_SIZE * VEC_LEN));
     if constexpr (VEC_LEN == 4)
-        elementwise_add_f32x4_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
+        add_f32x4_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
     else if constexpr (VEC_LEN == 1)
-        elementwise_add_f32_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
+        add_f32_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
     else
         static_assert(VEC_LEN != VEC_LEN, "Invalid VEC_LEN");
 }
 
 // -------------------------------------- FP16 --------------------------------------
 
-__global__ void elementwise_add_f16_kernel(half *a, half *b, half *c, int const N)
+__global__ void add_f16_kernel(half *a, half *b, half *c, int const N)
 {
     int const global_tid = threadIdx.x + blockDim.x * blockIdx.x;
     if (global_tid < N)
@@ -75,7 +83,7 @@ __global__ void elementwise_add_f16_kernel(half *a, half *b, half *c, int const 
 }
 
 // N % 8 == 0
-__global__ void elementwise_add_f16x8_kernel(half *a, half *b, half *c, int const N)
+__global__ void add_f16x8_kernel(half *a, half *b, half *c, int const N)
 {
     int const global_tid = threadIdx.x + blockIdx.x * blockDim.x;
     int const vec_base_idx = global_tid * 8;
@@ -101,38 +109,34 @@ __global__ void elementwise_add_f16x8_kernel(half *a, half *b, half *c, int cons
 
 // VEC_LEN = 1, 8
 template <int VEC_LEN>
-void elementwise_add_f16(half *a, half *b, half *c, int const N)
+void add_f16(half *a, half *b, half *c, int const N)
 {
     int grid_size;
     CUDA_CHECK(get_grid_size(N, &grid_size, BLOCK_SIZE * VEC_LEN));
     if constexpr (VEC_LEN == 8)
-        elementwise_add_f16x8_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
+        add_f16x8_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
     else if constexpr (VEC_LEN == 1)
-        elementwise_add_f16_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
+        add_f16_kernel<<<grid_size, BLOCK_SIZE>>>(a, b, c, N);
     else
         static_assert(VEC_LEN != VEC_LEN, "Invalid VEC_LEN");
 }
 
 // -------------------------------------- API --------------------------------------
 
-template <class T, int VEC_LEN>
-void elementwise_add(T *a, T *b, T *c, int const N)
+template <class Tp, int VEC_LEN>
+void add(Tp *a, Tp *b, Tp *c, int const N)
 {
-    if constexpr (std::is_same_v<T, float>)
-        elementwise_add_f32<VEC_LEN>(a, b, c, N);
-    else if constexpr (std::is_same_v<T, half>)
-        elementwise_add_f16<VEC_LEN>(a, b, c, N);
-    else
-        static_assert(!std::is_same_v<T, T>, "Unsupported type");
-}
-
-template <class T>
-void elementwise_add(T *a, T *b, T *c, int const N)
-{
-    for (int i = 0; i < N; i++)
+    if constexpr (std::is_same_v<Tp, float>)
     {
-        c[i] = a[i] + b[i];
+        if constexpr (VEC_LEN == 0)
+            add_cpu(a, b, c, N);
+        else
+            add_f32<VEC_LEN>(a, b, c, N);
     }
+    else if constexpr (std::is_same_v<Tp, half>)
+        add_f16<VEC_LEN>(a, b, c, N);
+    else
+        static_assert(!std::is_same_v<Tp, Tp>, "Unsupported type");
 }
 
 // -------------------------------------- END --------------------------------------

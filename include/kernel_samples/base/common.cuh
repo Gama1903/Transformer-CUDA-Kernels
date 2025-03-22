@@ -31,8 +31,8 @@
 // 定义最大元素数量
 constexpr int MAX_ELEMENT_NUM = 1024 * 1024;
 constexpr int N = MAX_ELEMENT_NUM;
-constexpr float MAX_VALUE = 1000.0f;
-constexpr float MIN_VALUE = -1000.0f;
+constexpr float MAX_VALUE = 3.0f;
+constexpr float MIN_VALUE = -3.0f;
 
 // 计算向上取整的除法
 constexpr int ceil_div(int n, int d)
@@ -85,10 +85,10 @@ __forceinline__ cudaError_t get_grid_size(int n, int *grid_size, int block_size 
 }
 
 // 类型萃取
-template <class T>
+template <class Tp>
 struct TypeTraits
 {
-    static_assert(!std::is_same_v<T, T>, "TypeTraits: Unsupported type!");
+    static_assert(!std::is_same_v<Tp, Tp>, "TypeTraits: Unsupported type!");
 };
 
 template <>
@@ -109,47 +109,61 @@ struct TypeTraits<half>
     static constexpr auto to_float = __half2float;
 };
 
+template <>
+struct TypeTraits<int>
+{
+    static constexpr auto from_float = [](float x)
+    { return static_cast<int>(x); };
+    static constexpr auto to_float = [](int x)
+    { return static_cast<float>(x); };
+};
+
 // 结果验证器
-template <class T, int N>
+template <class Tp, int N>
 struct Verifier
 {
-    using type_traits = TypeTraits<T>;
+    using type_traits = TypeTraits<Tp>;
 
-    void operator()(T const *ref, T const *res) const
+    void operator()(float const *ref, Tp const *res) const
     {
+        float val_res;
         for (int i = 0; i < N; i++)
         {
-            EXPECT_NEAR(ref[i], res[i], type_traits::epsilon); // 使用 GTest 框架进行浮点数比较
+            val_res = type_traits::to_float(res[i]);
+            EXPECT_NEAR(ref[i], val_res, type_traits::epsilon); // 使用 GTest 框架进行浮点数比较
         }
     }
 
-    void operator()(T const *ref, T const *res, int n) const
+    void operator()(float const *ref, Tp const *res, int n) const
     {
+        float val_res;
         for (int i = 0; i < n; i++)
         {
-            EXPECT_NEAR(ref[i], res[i], type_traits::epsilon);
+            val_res = type_traits::to_float(res[i]);
+            EXPECT_NEAR(ref[i], val_res, type_traits::epsilon);
         }
         for (int i = N - n; i < N; i++)
         {
-            EXPECT_NEAR(ref[i], res[i], type_traits::epsilon);
+            val_res = type_traits::to_float(res[i]);
+            EXPECT_NEAR(ref[i], val_res, type_traits::epsilon);
         }
     }
 };
 
 // 自定义分配器，使用 CUDA 统一内存管理
-template <class T>
+template <class Tp>
 struct CudaAllocator
 {
-    using value_type = T;
+    using value_type = Tp;
 
-    T *allocate(int size)
+    Tp *allocate(int size)
     {
-        T *ptr = nullptr;
-        CUDA_CHECK(cudaMallocManaged(&ptr, size * sizeof(T)));
+        Tp *ptr = nullptr;
+        CUDA_CHECK(cudaMallocManaged(&ptr, size * sizeof(Tp)));
         return ptr;
     }
 
-    void deallocate(T *ptr, int size = 0)
+    void deallocate(Tp *ptr, int size = 0)
     {
         CUDA_CHECK(cudaFree(ptr));
     }
@@ -165,12 +179,12 @@ struct no_prof_tag
 };
 
 // 自定义向量类，用于存储和操作数据
-template <class T, class Tag = no_prof_tag>
+template <class Tp, class Tag = no_prof_tag>
 struct CudaVector
 {
-    using type_traits = TypeTraits<T>;
+    using type_traits = TypeTraits<Tp>;
 
-    std::vector<T, CudaAllocator<T>> vec;
+    std::vector<Tp, CudaAllocator<Tp>> vec;
 
     explicit CudaVector(int size = 0, float value = 0.0f) : vec(size, type_traits::from_float(value)) {}
 
@@ -199,18 +213,18 @@ struct CudaVector
         return *this;
     }
 
-    T *data() noexcept { return vec.data(); }
-    T const *data() const noexcept { return vec.data(); }
+    Tp *data() noexcept { return vec.data(); }
+    Tp const *data() const noexcept { return vec.data(); }
     int size() const noexcept { return vec.size(); }
-    T &operator[](int i) noexcept { return vec[i]; }
-    T const &operator[](int i) const noexcept { return vec[i]; }
-    T &at(int i) noexcept { return vec.at(i); }
-    T const &at(int i) const noexcept { return vec.at(i); }
+    Tp &operator[](int i) noexcept { return vec[i]; }
+    Tp const &operator[](int i) const noexcept { return vec[i]; }
+    Tp &at(int i) noexcept { return vec.at(i); }
+    Tp const &at(int i) const noexcept { return vec.at(i); }
     auto begin() noexcept { return vec.begin(); }
     auto end() noexcept { return vec.end(); }
     bool empty() const noexcept { return vec.empty(); }
     auto front() noexcept { return vec.front(); }
-    void push_back(T const &value) noexcept { return vec.push_back(value); }
+    void push_back(Tp const &value) noexcept { return vec.push_back(value); }
 
     void reset(float value = 0.0f)
     {
@@ -220,26 +234,38 @@ struct CudaVector
         }
     }
 
-    void print(Tag tag = Tag{}) const
+    CudaVector<float> to_float() const
     {
-        if constexpr (std::is_same_v<Tag, prof_tag>)
-        {
-            for (int i = 0; i < vec.size(); i += 2)
-            {
-                std::cout << "Kernel " << i / 2 + 1 << "\n";
-                std::cout << "Duration: " << type_traits::to_float(vec[i]) << " us, ";
-                std::cout << "speedup: " << type_traits::to_float(vec[i + 1]) << "x\n\n";
-            }
-        }
-        else
-        {
-            for (auto v : vec)
-            {
-                std::cout << type_traits::to_float(v) << " ";
-            }
-            std::cout << "\n";
-        }
+        CudaVector<float> res(vec.size());
+        std::transform(vec.begin(), vec.end(), res.begin(), type_traits::to_float);
+        return res;
     }
+
+    void to_float(CudaVector<float> &res) const
+    {
+        std::transform(vec.begin(), vec.end(), res.begin(), type_traits::to_float);
+    }
+
+    // void print(Tag tag = Tag{}) const
+    // {
+    //     if constexpr (std::is_same_v<Tag, prof_tag>)
+    //     {
+    //         for (int i = 0; i < vec.size(); i += 2)
+    //         {
+    //             std::cout << "Kernel " << i / 2 + 1 << "\n";
+    //             std::cout << "Duration: " << type_traits::to_float(vec[i]) << " us, ";
+    //             std::cout << "speedup: " << type_traits::to_float(vec[i + 1]) << "x\n\n";
+    //         }
+    //     }
+    //     else
+    //     {
+    //         for (auto v : vec)
+    //         {
+    //             std::cout << type_traits::to_float(v) << " ";
+    //         }
+    //         std::cout << "\n";
+    //     }
+    // }
 
     void print(int n) const
     {

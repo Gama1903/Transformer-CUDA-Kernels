@@ -1,9 +1,7 @@
 /**
  * @file gelu.cuh
  * @author Gama1903 (gama1903@qq.com)
- * @brief 亮点
- *        1. 修复了原文件中截断数值范围过大的问题
- *        2. 在原文件基础上，使用模板函数，给出了不同数据类型和不同向量化长度核函数的统一接口，并给出了错误处理
+ * @brief 亮点：相比原文件，修复了截断范围过大的问题
  * @version 0.1
  * @date 2025-03-21
  *
@@ -29,13 +27,13 @@
 
 #define SQRT_2_PI M_SQRT2 *M_2_SQRTPI * 0.5f
 
-#define GELU gelu_tanh_approximate
-
 #define FLOAT4(val) (reinterpret_cast<float4 *>(&(val))[0])
 #define HALF2(val) (reinterpret_cast<half2 *>(&(val))[0])
 #define LDST128BITS(val) (reinterpret_cast<float4 *>(&(val))[0])
 
-__forceinline__ __device__ float gelu_tanh_approximate(float x)
+#define GELU gelu_tanh_approximate
+
+__forceinline__ __host__ __device__ float gelu_tanh_approximate(float x)
 {
     return 0.5f * x * (1.0f + tanhf(SQRT_2_PI * (x + 0.044715f * x * x * x)));
 }
@@ -47,6 +45,26 @@ __forceinline__ __device__ half gelu_tanh_approximate(half x)
     return HALF_DIV2 * x * (HALF_1 + ((hexp(inner * HALF_2) - HALF_1) / (hexp(inner * HALF_2) + HALF_1)));
 }
 
+template <class Tp>
+__forceinline__ __host__ __device__ Tp clip(Tp x)
+{
+    if constexpr (std::is_same_v<Tp, float>)
+        return fminf(fmaxf(x, MIN_EXP_F32), MAX_EXP_F32);
+    else if constexpr (std::is_same_v<Tp, half>)
+        return __hmin(__hmax(x, MIN_EXP_F16), MAX_EXP_F16);
+    else
+        static_assert(!std::is_same_v<Tp, Tp>, "Unsupported type");
+}
+
+void gelu_cpu(float *x, float *y, int const N)
+{
+    for (int i = 0; i < N; ++i)
+    {
+        float val = clip(x[i]);
+        y[i] = GELU(val);
+    }
+}
+
 // -------------------------------------- FP32 --------------------------------------
 
 __global__ void gelu_f32_kernel(float *x, float *y, int const N)
@@ -54,7 +72,7 @@ __global__ void gelu_f32_kernel(float *x, float *y, int const N)
     int const global_tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (global_tid < N)
     {
-        float val = fminf(fmaxf(x[global_tid], MIN_EXP_F32), MAX_EXP_F32);
+        float val = clip(x[global_tid]);
         y[global_tid] = GELU(val);
     }
 }
@@ -70,10 +88,10 @@ __global__ void gelu_f32x4_kernel(float *x, float *y, int const N)
         float4 reg_x = FLOAT4(x[vec_base_tid]);
 
         // clip
-        reg_x.x = fminf(fmaxf(reg_x.x, MIN_EXP_F32), MAX_EXP_F32);
-        reg_x.y = fminf(fmaxf(reg_x.y, MIN_EXP_F32), MAX_EXP_F32);
-        reg_x.z = fminf(fmaxf(reg_x.z, MIN_EXP_F32), MAX_EXP_F32);
-        reg_x.w = fminf(fmaxf(reg_x.w, MIN_EXP_F32), MAX_EXP_F32);
+        reg_x.x = clip(reg_x.x);
+        reg_x.y = clip(reg_x.y);
+        reg_x.z = clip(reg_x.z);
+        reg_x.w = clip(reg_x.w);
 
         // compute
         float4 reg_y;
@@ -108,7 +126,7 @@ __global__ void gelu_f16_kernel(half *x, half *y, int const N)
     int const global_tid = blockIdx.x * blockDim.x + threadIdx.x;
     if (global_tid < N)
     {
-        half val = __hmin(__hmax(x[global_tid], MIN_EXP_F16), MAX_EXP_F16);
+        half val = clip(x[global_tid]);
         y[global_tid] = GELU(val);
     }
 }
@@ -130,7 +148,7 @@ __global__ void gelu_f16x8_kernel(half *x, half *y, int const N)
         for (int i = 0; i < 8; ++i)
         {
             // clip
-            reg_a[i] = __hmin(__hmax(reg_a[i], MIN_EXP_F16), MAX_EXP_F16);
+            reg_a[i] = clip(reg_a[i]);
 
             // compute
             reg_b[i] = GELU(reg_a[i]);
@@ -157,77 +175,20 @@ void gelu_f16(half *x, half *y, int const N)
 
 // -------------------------------------- API --------------------------------------
 
-template <class T, int VEC_LEN>
-void gelu(T *x, T *y, int const N)
+template <class Tp, int VEC_LEN>
+void gelu(Tp *x, Tp *y, int const N)
 {
-    if constexpr (std::is_same_v<T, float>)
-        gelu_f32<VEC_LEN>(x, y, N);
-    else if constexpr (std::is_same_v<T, half>)
+    if constexpr (std::is_same_v<Tp, float>)
+    {
+        if constexpr (VEC_LEN == 0)
+            gelu_cpu(x, y, N);
+        else
+            gelu_f32<VEC_LEN>(x, y, N);
+    }
+    else if constexpr (std::is_same_v<Tp, half>)
         gelu_f16<VEC_LEN>(x, y, N);
     else
-        static_assert(!std::is_same_v<T, T>, "Unsupported type");
+        static_assert(!std::is_same_v<Tp, Tp>, "Unsupported type");
 }
 
-template <class T>
-void gelu(T *x, T *y, int const N)
-{
-    for (int i = 0; i < N; ++i)
-    {
-        T val = x[i];
-        T min_val, max_val;
-
-        // 根据数据类型确定截断范围
-        if constexpr (std::is_same_v<T, float>)
-        {
-            min_val = MIN_EXP_F32;
-            max_val = MAX_EXP_F32;
-        }
-        else if constexpr (std::is_same_v<T, half>)
-        {
-            min_val = MIN_EXP_F16;
-            max_val = MAX_EXP_F16;
-        }
-        else
-        {
-            static_assert(std::is_same_v<T, T>, "Unsupported type");
-        }
-
-        // 截断输入值到[min_val, max_val]
-        if (val < min_val)
-        {
-            val = min_val;
-        }
-        else if (val > max_val)
-        {
-            val = max_val;
-        }
-
-        // 转换为float进行计算
-        float val_float;
-        if constexpr (std::is_same_v<T, float>)
-        {
-            val_float = val;
-        }
-        else
-        {
-            val_float = __half2float(val);
-        }
-
-        // 计算GELU的tanh近似
-        float x_cubed = val_float * val_float * val_float;
-        float inner = SQRT_2_PI * (val_float + 0.044715f * x_cubed);
-        float tanh_val = tanhf(inner);
-        float result = 0.5f * val_float * (1.0f + tanh_val);
-
-        // 转换回原始类型并存储结果
-        if constexpr (std::is_same_v<T, float>)
-        {
-            y[i] = result;
-        }
-        else
-        {
-            y[i] = __float2half(result);
-        }
-    }
-}
 // -------------------------------------- END --------------------------------------
