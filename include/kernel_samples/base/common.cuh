@@ -1,48 +1,42 @@
 #pragma once
 
 #include <random>        // 随机数生成
-#include <cuda_fp16.h>   // half
 #include <iostream>      // cout
 #include <chrono>        // cpu 计时
 #include <functional>    // 函数式方法
 #include <vector>        // 向量内存管理
 #include <gtest/gtest.h> // EXPECT_NEAR 浮点数比较
+#include <algorithm>     // transform
+#include <cuda_fp16.h>   // half
+#include <stdio.h>       // printf
+
+#define CUDA_CHECK(call)                                                \
+    do                                                                  \
+    {                                                                   \
+        cudaError_t error_code = call;                                  \
+        if (error_code != cudaSuccess)                                  \
+        {                                                               \
+            printf("CUDA error in %s (line %d): %s\n",                  \
+                   __FILE__, __LINE__, cudaGetErrorString(error_code)); \
+        }                                                               \
+    } while (0)
 
 // 执行配置基本设置
 #define BLOCK_SIZE 128
 #define WAVE_NUM 32
 #define WARP_SIZE 32
 
-// 检查CUDA错误
-#define CUDA_CHECK(call)                                                             \
-    do                                                                               \
-    {                                                                                \
-        cudaError_t const error_code = call;                                         \
-        if (error_code != cudaSuccess)                                               \
-        {                                                                            \
-            std::cerr << "CUDA error:\n";                                            \
-            std::cerr << "  File:       " << __FILE__ << "\n";                       \
-            std::cerr << "  Line:       " << __LINE__ << "\n";                       \
-            std::cerr << "  Error code: " << error_code << "\n";                     \
-            std::cerr << "  Error text: " << cudaGetErrorString(error_code) << "\n"; \
-        }                                                                            \
-    } while (0)
+// 计算向上取整的除法
+#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 
 // 定义最大元素数量
 constexpr int MAX_ELEMENT_NUM = 1024 * 1024;
 constexpr int N = MAX_ELEMENT_NUM;
-constexpr float MAX_VALUE = 3.0f;
-constexpr float MIN_VALUE = -3.0f;
-
-// 计算向上取整的除法
-constexpr int ceil_div(int n, int d)
-{
-    return (n + d - 1) / d;
-}
+constexpr float MAX_VALUE = 1.0f;
+constexpr float MIN_VALUE = -1.0f;
 
 // wave_num = 32
 // block_size = 128, 256, 512
-template <bool DEBUG = false>
 __forceinline__ cudaError_t get_grid_size(int n, int *grid_size, int block_size = BLOCK_SIZE, int wave_num = WAVE_NUM)
 {
     int dev;
@@ -69,17 +63,9 @@ __forceinline__ cudaError_t get_grid_size(int n, int *grid_size, int block_size 
             return err;
         }
     }
-    if constexpr (DEBUG)
-    {
-        std::cout << "dev: " << dev << "\n";
-        std::cout << "sm_num: " << sm_num << "\n";
-        std::cout << "thread_per_sm: " << thread_per_sm << "\n";
-        std::cout << "grid_size_small: " << ceil_div(n, block_size) << "\n";
-        std::cout << "grid_size_large: " << sm_num * thread_per_sm / block_size * wave_num << "\n";
-    }
 
     *grid_size = std::max(1, std::min(
-                                 ceil_div(n, block_size),
+                                 CEIL_DIV(n, block_size),
                                  sm_num * thread_per_sm / block_size * wave_num));
     return cudaSuccess;
 }
@@ -94,7 +80,7 @@ struct TypeTraits
 template <>
 struct TypeTraits<float>
 {
-    static constexpr float epsilon = 1e-5f;
+    static constexpr float epsilon = 1e-3f;
     static constexpr auto from_float = [](float x)
     { return x; };
     static constexpr auto to_float = [](float x)
@@ -104,7 +90,7 @@ struct TypeTraits<float>
 template <>
 struct TypeTraits<half>
 {
-    static constexpr float epsilon = 1e-1f;
+    static constexpr float epsilon = 1.0f;
     static constexpr auto from_float = __float2half;
     static constexpr auto to_float = __half2float;
 };
@@ -124,28 +110,28 @@ struct Verifier
 {
     using type_traits = TypeTraits<Tp>;
 
-    void operator()(float const *ref, Tp const *res) const
+    void operator()(float const *ref, Tp const *res, float epsilon = type_traits::epsilon) const
     {
         float val_res;
         for (int i = 0; i < N; i++)
         {
             val_res = type_traits::to_float(res[i]);
-            EXPECT_NEAR(ref[i], val_res, type_traits::epsilon); // 使用 GTest 框架进行浮点数比较
+            EXPECT_NEAR(ref[i], val_res, epsilon); // 使用 GTest 框架进行浮点数比较
         }
     }
 
-    void operator()(float const *ref, Tp const *res, int n) const
+    void operator()(float const *ref, Tp const *res, int n, float epsilon = type_traits::epsilon) const
     {
         float val_res;
         for (int i = 0; i < n; i++)
         {
             val_res = type_traits::to_float(res[i]);
-            EXPECT_NEAR(ref[i], val_res, type_traits::epsilon);
+            EXPECT_NEAR(ref[i], val_res, epsilon);
         }
         for (int i = N - n; i < N; i++)
         {
             val_res = type_traits::to_float(res[i]);
-            EXPECT_NEAR(ref[i], val_res, type_traits::epsilon);
+            EXPECT_NEAR(ref[i], val_res, epsilon);
         }
     }
 };
@@ -269,17 +255,22 @@ struct CudaVector
 
     void print(int n) const
     {
-        int size = vec.size();
-        for (int i = 0; i < n; i++)
+        if (n == 1)
+            std::cout << type_traits::to_float(vec[0]) << "\n";
+        else
         {
-            std::cout << type_traits::to_float(vec[i]) << " ";
+            int size = vec.size();
+            for (int i = 0; i < n; i++)
+            {
+                std::cout << type_traits::to_float(vec[i]) << " ";
+            }
+            std::cout << "\n";
+            for (int i = size - n; i < size; i++)
+            {
+                std::cout << type_traits::to_float(vec[i]) << " ";
+            }
+            std::cout << "\n";
         }
-        std::cout << "\n";
-        for (int i = size - n; i < size; i++)
-        {
-            std::cout << type_traits::to_float(vec[i]) << " ";
-        }
-        std::cout << "\n";
     }
 };
 

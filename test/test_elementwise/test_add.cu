@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <gtest/gtest.h>
 #include <kernel_samples/base/common.cuh>
 #include <kernel_samples/elementwise/add.cuh>
