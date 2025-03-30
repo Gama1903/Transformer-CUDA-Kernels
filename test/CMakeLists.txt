@@ -3,22 +3,24 @@
 # 查找第三方库
 find_package(GTest COMPONENTS gtest CONFIG REQUIRED)
 find_package(glog COMPONENTS glog CONFIG REQUIRED)
+
 # find_package(Torch REQUIRED)
 # find_package(Python REQUIRED)
 
 # 添加可执行文件
-add_executable(test_kernel_samples)
+add_executable(test)
 file(GLOB_RECURSE TEST_SOURCE CONFIGURE_DEPENDS *.cpp *.cu)
-target_sources(test_kernel_samples PUBLIC ${TEST_SOURCE})
+target_sources(test PUBLIC ${TEST_SOURCE})
 
 # 包含头文件
-target_include_directories(test_kernel_samples PUBLIC ../include)
+target_include_directories(test PUBLIC ../include ${CUDAToolkit_INCLUDE_DIRS})
 
 # 链接库文件
-target_link_libraries(test_kernel_samples PUBLIC GTest::gtest glog::glog 
+target_link_libraries(test PUBLIC GTest::gtest glog::glog CUDA::cudart CUDA::cublas
+
     # ${TORCH_LIBRARIES}
 )
 
 # 测试设置
 enable_testing()
-add_test(NAME test_kernel_samples COMMAND test_kernel_samples)
+add_test(NAME test COMMAND test)

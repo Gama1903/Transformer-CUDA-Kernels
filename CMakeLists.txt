@@ -1,7 +1,7 @@
 # 根文件夹cmake文件，配置基本设置
 
 # CMAKE最低版本要求
-cmake_minimum_required(VERSION 3.10 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.17 FATAL_ERROR)
 
 # 设置CMAKE内置变量
 # CPP设置
@@ -39,6 +39,9 @@ endif()
 if(CMAKE_CXX_STANDARD LESS 17)
     add_compile_options(-lstdc++fs)
 endif()
+
+# 查找CUDA工具包
+find_package(CUDAToolkit REQUIRED)
 
 # 添加子目录
 add_subdirectory(test)
