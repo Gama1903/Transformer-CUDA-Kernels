@@ -1,0 +1,7 @@
+{
+  "C_Cpp.default.includePath": [
+    "/usr/local/lib/python3.10/dist-packages/libtorch/include",
+    "/usr/local/lib/python3.10/dist-packages/libtorch/include/torch/csrc/api/include",
+    "${workspaceFolder}/**"
+  ]
+}

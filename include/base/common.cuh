@@ -1,11 +1,12 @@
 #pragma once
 
-#include <cublas_v2.h> // cublasHandle_t
-#include <cstdio>      // snprintf
-#include <stdexcept>   // runtime_error
-#include <cuda_fp16.h> // half
-#include <type_traits> // 类型萃取
-#include <random>      // 随机数生成
+#include <cublas_v2.h>   // cublasHandle_t
+#include <cstdio>        // snprintf
+#include <stdexcept>     // runtime_error
+#include <cuda_fp16.h>   // half
+#include <type_traits>   // 类型萃取
+#include <random>        // 随机数生成
+#include <gtest/gtest.h> // gtest
 
 // 向上取整除法
 #define CDIV(x, y) (((x) + (y) - 1) / (y))
@@ -46,16 +47,13 @@
         }                                                         \
     } while (0)
 
-// 最大数据长度
-constexpr int N = 1024 * 1024 * 32;
-
 // CUDA常量
-constexpr int block_size = 256;
-constexpr int warp_size = 32;
-constexpr int num_wave = 32;
+constexpr int BLOCK_SIZE = 256;
+constexpr int WARP_SIZE = 32;
+constexpr int NUM_WAVE = 32;
 
 // 获取grid_size
-__forceinline__ cudaError_t getGridSize(int n, int *grid_size, int block_size = block_size, int num_wave = num_wave)
+__forceinline__ cudaError_t getGridSize(int n, int *grid_size, int block_size = BLOCK_SIZE, int num_wave = NUM_WAVE)
 {
     int dev;
     {
@@ -233,58 +231,108 @@ struct CudaVector
     }
 };
 
+// 数值检验函数
+inline void verify(float const *res, float const *ref, int N, float tolerance)
+{
+    int failedIndex = -1;
+    for (int i = 0; i < N; i++)
+    {
+        if (std::abs(res[i] - ref[i]) > tolerance)
+        {
+            failedIndex = i;
+            EXPECT_NEAR(res[i], ref[i], tolerance) << "数值对比失败，索引为: " << failedIndex;
+            break;
+        }
+    }
+}
+
 // CUDA基准测试类
 struct CudaBenchmark
 {
     struct Result
     {
-        float avg_time;
-        float total_time;
+        float avg_time{};
+        double total_time{};
+        float min_time{std::numeric_limits<float>::max()};
+        float max_time{0};
     };
 
     int num_runs_;
     int num_warmup_;
+    std::vector<cudaEvent_t> start_events; // 每个run独立事件
+    std::vector<cudaEvent_t> stop_events;
 
-    explicit CudaBenchmark(int num_runs = 50, int num_warmup = 2) : num_runs_(num_runs), num_warmup_(num_warmup) {}
+    explicit CudaBenchmark(int num_runs = 1000, int num_warmup = 100)
+        : num_runs_(num_runs), num_warmup_(num_warmup)
+    {
+        // 预创建事件对象
+        start_events.resize(num_runs_);
+        stop_events.resize(num_runs_);
+        for (int i = 0; i < num_runs_; ++i)
+        {
+            CHECK_CUDA(cudaEventCreate(&start_events[i]));
+            CHECK_CUDA(cudaEventCreate(&stop_events[i]));
+        }
+    }
+
+    ~CudaBenchmark()
+    {
+        for (auto &e : start_events)
+            cudaEventDestroy(e);
+        for (auto &e : stop_events)
+            cudaEventDestroy(e);
+    }
 
     template <class SetupFunc, class KernelFunc>
     Result run(SetupFunc &&setup, KernelFunc &&kernel)
     {
-        for (int i = 0; i < num_warmup_; i++)
+        // Warmup阶段（无测量）
+        setup();
+        for (int i = 0; i < num_warmup_; ++i)
         {
-            setup();
             kernel();
-            CHECK_CUDA(cudaDeviceSynchronize());
         }
-
-        cudaEvent_t start, stop;
-        CHECK_CUDA(cudaEventCreate(&start));
-        CHECK_CUDA(cudaEventCreate(&stop));
+        CHECK_CUDA(cudaDeviceSynchronize());
 
         Result result;
-        for (int i = 0; i < num_runs_; i++)
+        std::vector<float> measurements;
+        measurements.reserve(num_runs_);
+
+        // 阶段1：记录所有事件（无同步）
+        setup();
+        for (int i = 0; i < num_runs_; ++i)
         {
-            setup();
-            CHECK_CUDA(cudaEventRecord(start));
+            CHECK_CUDA(cudaEventRecord(start_events[i])); // 记录启动时间
             kernel();
-            CHECK_CUDA(cudaEventRecord(stop));
-            CHECK_CUDA(cudaEventSynchronize(stop));
-
-            float elapsed_time;
-            CHECK_CUDA(cudaEventElapsedTime(&elapsed_time, start, stop));
-            result.total_time += elapsed_time;
+            CHECK_CUDA(cudaEventRecord(stop_events[i])); // 记录结束时间
         }
-        result.avg_time = result.total_time / num_runs_;
 
-        CHECK_CUDA(cudaEventDestroy(start));
-        CHECK_CUDA(cudaEventDestroy(stop));
+        // 阶段2：统一同步所有事件
+        for (auto &e : stop_events)
+        {
+            CHECK_CUDA(cudaEventSynchronize(e)); // 等待所有事件完成
+        }
 
+        // 阶段3：计算耗时
+        for (int i = 0; i < num_runs_; ++i)
+        {
+            float elapsed;
+            CHECK_CUDA(cudaEventElapsedTime(&elapsed,
+                                            start_events[i], stop_events[i]));
+
+            result.total_time += static_cast<double>(elapsed);
+            result.min_time = std::min(result.min_time, elapsed);
+            result.max_time = std::max(result.max_time, elapsed);
+        }
+
+        result.avg_time = static_cast<float>(result.total_time / num_runs_);
         return result;
     }
 
-    static void print_result(Result const &result)
+    void print_result(Result const &result)
     {
         printf("Average time: %f ms\n", result.avg_time);
-        // printf("Total time: %f ms\n", result.total_time);
+        // printf("Min time: %f ms\n", result.min_time);
+        // printf("Max time: %f ms\n", result.max_time);
     }
 };
